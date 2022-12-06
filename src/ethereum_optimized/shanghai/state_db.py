@@ -25,7 +25,7 @@ except ImportError as e:
         "package"
     )
 
-from ethereum.base_types import U256, Bytes, Uint
+from ethereum.base_types import U256, Bytes, Uint, Bytes32
 from ethereum.shanghai.eth_types import Account, Address, Root
 
 
@@ -38,6 +38,21 @@ class UnmodifiedType:
 
 
 Unmodified = UnmodifiedType()
+
+
+class TransientStorageChange():
+
+    """
+    Represents a change to transient storage, set in journal entries to reset the state in the case of reverts.
+    """
+    account: Address
+    key: Bytes32
+    prev_value: Bytes32
+
+    def __init__(self, acct: Address, key: Bytes32, prev_value: Bytes32):
+        self.account = acct
+        self.key = key
+        self.prev_value = prev_value
 
 
 @dataclass
@@ -54,6 +69,7 @@ class State:
     db: Any
     dirty_accounts: Dict[Address, Optional[Account]]
     dirty_storage: Dict[Address, Dict[Bytes, U256]]
+    transient_storage: Dict[Address, Dict[Bytes32, Bytes32]]
     destroyed_accounts: Set[Address]
     tx_restore_points: List[int]
     journal: List[Any]
@@ -67,6 +83,7 @@ class State:
         self.db = rust_pyspec_glue.DB(path)
         self.dirty_accounts = {}
         self.dirty_storage = {}
+        self.transient_storage = {}
         self.destroyed_accounts = set()
         self.tx_restore_points = []
         self.journal = []
@@ -97,6 +114,7 @@ def close_state(state: State) -> None:
     del state.dirty_storage
     del state.destroyed_accounts
     del state.journal
+    del state.transient_storage
 
 
 def get_metadata(state: State, key: Bytes) -> Optional[Bytes]:
@@ -168,6 +186,7 @@ def flush(state: State) -> None:
     state.destroyed_accounts = set()
     state.dirty_accounts.clear()
     state.dirty_storage.clear()
+    state.transient_storage.clear()
 
 
 def rollback_db_transaction(state: State) -> None:
@@ -189,6 +208,7 @@ def begin_transaction(state: State) -> None:
     if not state.tx_restore_points:
         flush(state)
     state.tx_restore_points.append(len(state.journal))
+    state.transient_storage = {}
 
 
 def commit_transaction(state: State) -> None:
@@ -208,6 +228,8 @@ def rollback_transaction(state: State) -> None:
     restore_point = state.tx_restore_points.pop()
     while len(state.journal) > restore_point:
         item = state.journal.pop()
+        if (item is TransientStorageChange):
+            state.transient_storage[item.account][item.key] = item.prev_value
         if len(item) == 3:
             # Revert a storage key write
             if item[2] is Unmodified:
@@ -292,3 +314,24 @@ def destroy_storage(state: State, address: Address) -> None:
     state.journal.append((address, state.dirty_storage.pop(address, {})))
     state.destroyed_accounts.add(address)
     set_account(state, address, get_account_optional(state, address))
+
+
+def get_transient_storage(state: State, address: Address, key: Bytes32) -> Bytes32:
+    """
+    Gets transient storage.
+    """
+    return state.transient_storage[address][key]
+
+
+def set_transient_storage(state: State, address: Address, key: Bytes32, value: Bytes32) -> None:
+    """
+    Sets transient storage.
+    """
+    prev_value = state.transient_storage[address][key]
+
+    if prev_value == value:
+        return
+
+    state.journal.append(TransientStorageChange(address, key, prev_value))
+
+    state.transient_storage[address][key] = value

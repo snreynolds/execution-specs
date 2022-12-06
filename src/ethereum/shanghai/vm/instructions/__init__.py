@@ -28,6 +28,7 @@ from . import memory as memory_instructions
 from . import stack as stack_instructions
 from . import storage as storage_instructions
 from . import system as system_instructions
+from . import transient_storage as transient_storage_instructions
 
 
 class Ops(enum.Enum):
@@ -109,6 +110,10 @@ class Ops(enum.Enum):
     # Storage Ops
     SLOAD = 0x54
     SSTORE = 0x55
+
+    # Transient Storage Ops
+    TLOAD = 0xb3
+    TSTORE = 0xb4
 
     # Pop Operation
     POP = 0x50
@@ -351,4 +356,6 @@ op_implementation: Dict[Ops, Callable] = {
     Ops.STATICCALL: system_instructions.staticcall,
     Ops.REVERT: system_instructions.revert,
     Ops.CREATE2: system_instructions.create2,
+    Ops.TLOAD: transient_storage_instructions.tload,
+    Ops.TSTORE: transient_storage_instructions.tstore
 }

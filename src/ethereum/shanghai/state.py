@@ -17,9 +17,9 @@ There is a distinction between an account that does not exist and
 `EMPTY_ACCOUNT`.
 """
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Mapping
 
-from ethereum.base_types import U256, Bytes, Uint, modify
+from ethereum.base_types import U256, Bytes, Uint, modify, Bytes32
 from ethereum.utils.ensure import ensure
 
 from .eth_types import EMPTY_ACCOUNT, Account, Address, Root
@@ -38,6 +38,8 @@ class State:
     _storage_tries: Dict[Address, Trie[Bytes, U256]] = field(
         default_factory=dict
     )
+    _transient_storage_mapping: Dict[Address, Dict[Bytes32, Bytes32]] = field(
+        default_factory=dict)
     _snapshots: List[
         Tuple[
             Trie[Address, Optional[Account]], Dict[Address, Trie[Bytes, U256]]
@@ -53,6 +55,7 @@ def close_state(state: State) -> None:
     del state._main_trie
     del state._storage_tries
     del state._snapshots
+    del state._transient_storage_mapping
 
 
 def begin_transaction(state: State) -> None:
@@ -73,6 +76,7 @@ def begin_transaction(state: State) -> None:
             {k: copy_trie(t) for (k, t) in state._storage_tries.items()},
         )
     )
+    state._transient_storage_mapping = {}
 
 
 def commit_transaction(state: State) -> None:
@@ -85,6 +89,7 @@ def commit_transaction(state: State) -> None:
         The state.
     """
     state._snapshots.pop()
+    state._transient_storage_mapping.clear()
 
 
 def rollback_transaction(state: State) -> None:
@@ -98,6 +103,7 @@ def rollback_transaction(state: State) -> None:
         The state.
     """
     state._main_trie, state._storage_tries = state._snapshots.pop()
+    state._transient_storage_mapping.clear()
 
 
 def get_account(state: State, address: Address) -> Account:
@@ -257,6 +263,54 @@ def set_storage(
     trie_set(trie, key, value)
     if trie._data == {}:
         del state._storage_tries[address]
+
+
+def get_transient_storage(state: State, address: Address, key: Bytes32) -> Bytes32:
+    """
+    Get a value at a transient storage key on an account. Returns `Bytes32(0)` if the
+    transient storage key has not been set previously.
+
+    Parameters
+    ----------
+    state: `State`
+        The state
+    address : `Address`
+        Address of the account.
+    key : `Bytes`
+        Key to lookup.
+
+    Returns
+    -------
+    value : `Bytes32`
+        Value at the key.
+    """
+    mapping = state._transient_storage_mapping.get(address)
+    if mapping is None:
+        return Bytes32(0)
+
+    value = mapping.get(key)
+
+    assert isinstance(value, Bytes32)
+    return value
+
+
+def set_transient_storage(state: State, address: Address, key: Bytes32, value: Bytes32) -> None:
+    """
+    Set a value at a transient storage key on an account.
+
+    Parameters
+    ----------
+    state: `State`
+        The state
+    address : `Address`
+        Address of the account.
+    key : `Bytes`
+        Key to set.
+    value : `Bytes32`
+        Value to set at the key.
+    """
+    mapping = state._transient_storage_mapping.setdefault(address, dict())
+    mapping.update(key, value)
 
 
 def storage_root(state: State, address: Address) -> Root:
